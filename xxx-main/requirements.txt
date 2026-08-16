@@ -30,4 +30,12 @@ phonenumbers==8.13.52
 git add .
 git commit -m "Add requirements.txt and Procfile for Heroku"
 git push heroku main
+pyrogram>=2.0.106
+tgcrypto>=1.2.5
+pypdf>=3.0.0
+yt-dlp>=2023.10.13
+requests>=2.31.0
+aiohttp>=3.8.5
+aiofiles>=23.2.1
+
 
