@@ -1,6 +1,6 @@
 {
   "name": "Uploader and TXT Maker",
-  "description": "Telegram uploader bot with a secure authentication API",
+  "description": "Telegram uploader bot with a stateless authentication API",
   "repository": "https://github.com/loginyttg-web/uploader-and-txt-maker",
   "buildpacks": [
     {"url": "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest.git"},
@@ -13,9 +13,12 @@
     "BOT_TOKEN": {"description": "Telegram bot token from BotFather"},
     "AUTH_USERS": {"description": "Comma-separated Telegram user IDs allowed to use the bot"},
     "GROUPS": {"description": "Optional comma-separated Telegram group IDs", "required": false},
-    "DATABASE_URL": {"description": "PostgreSQL connection URL"},
-    "REDIS_URL": {"description": "Redis connection URL"},
+    "AUTH_API_USERS": {"description": "JSON array of Argon2id-protected API login accounts", "value": "[]", "required": false},
     "JWT_SECRET": {"description": "Random secret of at least 32 bytes"},
-    "REFRESH_TOKEN_PEPPER": {"description": "A different random secret of at least 32 bytes"}
+    "REFRESH_TOKEN_PEPPER": {"description": "A different random secret of at least 32 bytes"},
+    "ADMIN_USER_ID": {"description": "Telegram user ID allowed to run /cookie", "required": false},
+    "COOKIE_AUTH_URL": {"description": "Authentication endpoint that returns Set-Cookie", "required": false},
+    "COOKIE_AUTH_IDENTIFIER": {"description": "Login identifier for the cookie endpoint", "required": false},
+    "COOKIE_AUTH_PASSWORD": {"description": "Login password for the cookie endpoint", "required": false}
   }
 }
