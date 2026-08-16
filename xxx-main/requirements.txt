@@ -27,3 +27,7 @@ PyJWT==2.10.1
 pydantic-settings==2.7.1
 email-validator==2.2.0
 phonenumbers==8.13.52
+git add .
+git commit -m "Add requirements.txt and Procfile for Heroku"
+git push heroku main
+
