@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .users import ConfiguredUser
 
 
 class Settings(BaseSettings):
@@ -16,8 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str
-    redis_url: str
+    auth_api_users: list[ConfiguredUser] = Field(default_factory=list)
 
     jwt_secret: SecretStr
     refresh_token_pepper: SecretStr

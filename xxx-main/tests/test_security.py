@@ -17,8 +17,6 @@ class SecurityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.settings = Settings(
-            database_url="postgresql://user:password@db/test",
-            redis_url="redis://redis:6379/0",
             jwt_secret="j" * 48,
             refresh_token_pepper="r" * 48,
             bot_enabled=False,
@@ -48,7 +46,7 @@ class SecurityTests(unittest.TestCase):
             self.settings.jwt_access_token_expire_seconds,
         )
 
-    def test_refresh_token_is_opaque_and_only_hash_is_persistable(self) -> None:
+    def test_refresh_token_is_opaque_and_hmac_protected(self) -> None:
         refresh = create_refresh_token(self.settings)
         self.assertGreaterEqual(len(refresh.raw_token), 64)
         self.assertNotEqual(refresh.raw_token, refresh.token_hash)

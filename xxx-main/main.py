@@ -45,6 +45,15 @@ from logging.handlers import RotatingFileHandler
 import logging
 from io import BytesIO
 
+from cookie_session import (
+    CookieAuthenticationError,
+    CookieAuthConfig,
+    CookieSessionConfigurationError,
+    CookieSessionManager,
+    EmptyCookieSessionError,
+    UnauthenticatedSessionError,
+)
+
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -77,15 +86,28 @@ def _integer_list_from_environment(name):
         raise RuntimeError(f"{name} must be a comma-separated list of integers") from exc
 
 
+def _optional_integer_from_environment(name):
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return None
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+
+
 bot = Client(
     "bot",
     bot_token=_required_environment("BOT_TOKEN"),
     api_id=int(_required_environment("API_ID")),
     api_hash=_required_environment("API_HASH"),
+    in_memory=True,
 )
 auth_users = _integer_list_from_environment("AUTH_USERS")
 sudo_users = auth_users
 sudo_groups = _integer_list_from_environment("GROUPS")
+admin_user_id = _optional_integer_from_environment("ADMIN_USER_ID")
+cookie_session_manager = CookieSessionManager(CookieAuthConfig.from_environment())
 
 shell_usage = f"**USAGE:** Executes terminal commands directly via bot.\n\n<pre>/shell pip install requests</pre>"
 def one(user_id):
@@ -126,6 +148,89 @@ async def shell(client, message: Message):
     else:
         await message.reply_text(f"**Output:**:\n\n{result}", quote=True)
 
+
+async def _active_cookies(force_refresh=False):
+    if force_refresh or not cookie_session_manager.is_authenticated:
+        return await asyncio.to_thread(cookie_session_manager.authenticate)
+    try:
+        return await asyncio.to_thread(cookie_session_manager.get_cookies)
+    except (UnauthenticatedSessionError, EmptyCookieSessionError):
+        return await asyncio.to_thread(cookie_session_manager.authenticate)
+
+
+@bot.on_message(filters.command(["cookie"]))
+async def cookie_handler(client: Client, message: Message):
+    requester_id = message.from_user.id if message.from_user is not None else None
+    if admin_user_id is None:
+        await message.reply_text(
+            "Cookie command is disabled because ADMIN_USER_ID is not configured."
+        )
+        return
+    if requester_id != admin_user_id:
+        await message.reply_text("You are not authorized to use this command.")
+        return
+
+    if len(message.command) > 1 and message.command[1].casefold() != "refresh":
+        await message.reply_text("Usage: /cookie or /cookie refresh")
+        return
+
+    status_message = await message.reply_text("Checking the authenticated session...")
+    try:
+        cookies = await _active_cookies(
+            force_refresh=len(message.command) > 1
+        )
+    except CookieSessionConfigurationError:
+        await status_message.edit_text(
+            "Cookie authentication is not configured. Check the COOKIE_AUTH_* "
+            "Railway variables."
+        )
+        return
+    except CookieAuthenticationError:
+        await status_message.edit_text(
+            "Cookie authentication failed. Verify the endpoint, credentials, and "
+            "network availability."
+        )
+        return
+    except EmptyCookieSessionError:
+        await status_message.edit_text(
+            "Authentication completed, but the endpoint returned no active cookies."
+        )
+        return
+    except Exception as exc:
+        logging.error("Unexpected cookie-session failure", exc_info=exc)
+        await status_message.edit_text(
+            "An unexpected error occurred while reading the authenticated session."
+        )
+        return
+
+    cookie_json = json.dumps(cookies, ensure_ascii=False, indent=2, sort_keys=True)
+    safe_json = cookie_json.replace("`", "\\u0060")
+    try:
+        if len(safe_json) <= 3500:
+            await client.send_message(
+                chat_id=admin_user_id,
+                text=f"**Active session cookies**\n```json\n{safe_json}\n```",
+            )
+        else:
+            cookie_file = BytesIO(cookie_json.encode("utf-8"))
+            cookie_file.name = "cookies.json"
+            await client.send_document(
+                chat_id=admin_user_id,
+                document=cookie_file,
+                caption="Active session cookies",
+            )
+    except Exception as exc:
+        logging.error("Could not deliver cookies to the admin chat", exc_info=exc)
+        await status_message.edit_text(
+            "Cookies were extracted, but they could not be delivered to your private "
+            "admin chat. Start the bot privately and try again."
+        )
+        return
+
+    if message.chat.id == admin_user_id:
+        await status_message.delete()
+    else:
+        await status_message.edit_text("Cookies were sent to your private admin chat.")
 
 
 keyboard = InlineKeyboardMarkup(

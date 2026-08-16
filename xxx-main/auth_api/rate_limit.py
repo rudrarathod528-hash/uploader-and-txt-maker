@@ -1,28 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import math
+import time
 from dataclasses import dataclass
-
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
-
-
-_CONSUME_SCRIPT = """
-local output = {}
-local window_ms = tonumber(ARGV[1])
-for _, key in ipairs(KEYS) do
-    local count = redis.call('INCR', key)
-    if count == 1 then
-        redis.call('PEXPIRE', key, window_ms)
-    end
-    local ttl = redis.call('PTTL', key)
-    table.insert(output, count)
-    table.insert(output, ttl)
-end
-return output
-"""
+from typing import Callable
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,27 +15,37 @@ class RateLimitDecision:
     retry_after_seconds: int = 0
 
 
-class RateLimiterUnavailable(RuntimeError):
-    pass
+@dataclass(slots=True)
+class _Counter:
+    count: int
+    expires_at: float
 
 
 class AuthenticationRateLimiter:
-    """Redis-backed, process-safe fixed-window limiter for login attempts."""
+    """Process-local fixed-window limiter for login attempts.
+
+    The application runs one replica while the Telegram bot is enabled. Counters reset
+    when that process restarts and are intentionally not stored in an external service.
+    """
 
     def __init__(
         self,
-        redis: Redis,
         *,
         key_secret: str,
         window_seconds: int,
         identifier_limit: int,
         ip_limit: int,
+        clock: Callable[[], float] = time.monotonic,
+        max_entries: int = 100_000,
     ) -> None:
-        self._redis = redis
         self._key_secret = key_secret.encode("utf-8")
         self._window_seconds = window_seconds
         self._identifier_limit = identifier_limit
         self._ip_limit = ip_limit
+        self._clock = clock
+        self._max_entries = max_entries
+        self._counters: dict[str, _Counter] = {}
+        self._lock = asyncio.Lock()
 
     def _digest(self, scope: str, value: str) -> str:
         return hmac.new(
@@ -63,40 +57,55 @@ class AuthenticationRateLimiter:
     def _identifier_key(self, identifier: str) -> str:
         return f"auth-limit:id:{self._digest('identifier', identifier)}"
 
-    async def consume(self, *, client_ip: str, identifier: str) -> RateLimitDecision:
-        keys = [
-            f"auth-limit:ip:{self._digest('ip', client_ip)}",
-            self._identifier_key(identifier),
+    def _consume_key(self, key: str, now: float) -> _Counter:
+        counter = self._counters.get(key)
+        if counter is None or counter.expires_at <= now:
+            counter = _Counter(count=1, expires_at=now + self._window_seconds)
+            self._counters[key] = counter
+        else:
+            counter.count += 1
+        return counter
+
+    def _prune(self, now: float) -> None:
+        expired = [
+            key for key, counter in self._counters.items() if counter.expires_at <= now
         ]
-        try:
-            raw = await self._redis.eval(  # type: ignore[misc]
-                _CONSUME_SCRIPT,
-                len(keys),
-                *keys,
-                str(self._window_seconds * 1000),
-            )
-        except RedisError as exc:
-            raise RateLimiterUnavailable from exc
+        for key in expired:
+            self._counters.pop(key, None)
 
-        ip_count, ip_ttl_ms, identifier_count, identifier_ttl_ms = map(int, raw)
-        retry_after_ms = 0
-        if ip_count > self._ip_limit:
-            retry_after_ms = max(retry_after_ms, ip_ttl_ms)
-        if identifier_count > self._identifier_limit:
-            retry_after_ms = max(retry_after_ms, identifier_ttl_ms)
+        overflow = len(self._counters) - self._max_entries
+        if overflow > 0:
+            oldest = sorted(
+                self._counters, key=lambda key: self._counters[key].expires_at
+            )[:overflow]
+            for key in oldest:
+                self._counters.pop(key, None)
 
-        if retry_after_ms > 0:
+    async def consume(self, *, client_ip: str, identifier: str) -> RateLimitDecision:
+        now = self._clock()
+        ip_key = f"auth-limit:ip:{self._digest('ip', client_ip)}"
+        identifier_key = self._identifier_key(identifier)
+
+        async with self._lock:
+            self._prune(now)
+            ip_counter = self._consume_key(ip_key, now)
+            identifier_counter = self._consume_key(identifier_key, now)
+            self._prune(now)
+
+            retry_after = 0.0
+            if ip_counter.count > self._ip_limit:
+                retry_after = max(retry_after, ip_counter.expires_at - now)
+            if identifier_counter.count > self._identifier_limit:
+                retry_after = max(retry_after, identifier_counter.expires_at - now)
+
+        if retry_after > 0:
             return RateLimitDecision(
                 allowed=False,
-                retry_after_seconds=max(1, math.ceil(retry_after_ms / 1000)),
+                retry_after_seconds=max(1, math.ceil(retry_after)),
             )
         return RateLimitDecision(allowed=True)
 
     async def clear_identifier(self, identifier: str) -> None:
         """Clear account lockout after the caller proves possession of the password."""
-        try:
-            await self._redis.delete(self._identifier_key(identifier))
-        except RedisError:
-            # Token issuance already succeeded. A transient cleanup failure must not
-            # turn a valid login into a client-visible error.
-            return
+        async with self._lock:
+            self._counters.pop(self._identifier_key(identifier), None)

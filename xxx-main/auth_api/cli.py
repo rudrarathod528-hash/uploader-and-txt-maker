@@ -1,34 +1,47 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import getpass
+import json
 import os
+import secrets
 import sys
+import uuid
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy.exc import IntegrityError
 
-from .config import get_settings
-from .database import create_database_engine, create_session_factory
 from .identifier import IdentifierKind, normalize_username, resolve_identifier
-from .models import User
 from .security import hash_password
+from .users import ConfiguredUser, InMemoryUserRepository
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Authentication user administration")
+    parser = argparse.ArgumentParser(
+        description="Generate environment configuration for an authentication user"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    create = subparsers.add_parser("create-user", help="create a login user")
-    create.add_argument("--email")
-    create.add_argument("--phone")
-    create.add_argument("--username")
-    create.add_argument(
+    generate = subparsers.add_parser(
+        "generate-user", help="print one AUTH_API_USERS JSON object"
+    )
+    generate.add_argument("--id", type=uuid.UUID)
+    generate.add_argument("--email")
+    generate.add_argument("--phone")
+    generate.add_argument("--username")
+    generate.add_argument(
+        "--phone-region",
+        default=os.getenv("DEFAULT_PHONE_REGION", "IN"),
+        help="region used for a phone number without a country code (default: IN)",
+    )
+    generate.add_argument(
         "--password-env",
         metavar="VARIABLE",
         help="read the password from this environment variable instead of prompting",
     )
-    create.add_argument("--inactive", action="store_true")
+    generate.add_argument("--inactive", action="store_true")
+    subparsers.add_parser(
+        "generate-secrets",
+        help="generate JWT_SECRET and REFRESH_TOKEN_PEPPER values",
+    )
     return parser
 
 
@@ -78,46 +91,52 @@ def _normalize_user(username: str | None, region: str) -> str | None:
     return normalized
 
 
-async def _create_user(args: argparse.Namespace) -> None:
-    settings = get_settings()
+def _generate_user(args: argparse.Namespace) -> None:
     email = _normalize_email(args.email)
-    phone = _normalize_phone(args.phone, settings.default_phone_region)
-    username = _normalize_user(args.username, settings.default_phone_region)
+    phone = _normalize_phone(args.phone, args.phone_region)
+    username = _normalize_user(args.username, args.phone_region)
     if not any((email, phone, username)):
         raise ValueError("Provide at least one of --email, --phone, or --username")
 
-    password = _read_password(args.password_env)
-    engine = create_database_engine(settings.database_url)
-    session_factory = create_session_factory(engine)
-    try:
-        async with session_factory() as session:
-            session.add(
-                User(
-                    email_normalized=email,
-                    phone_e164=phone,
-                    username_normalized=username,
-                    password_hash=hash_password(password),
-                    is_active=not args.inactive,
-                )
-            )
-            try:
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
-                raise ValueError(
-                    "An email, phone, or username is already in use"
-                ) from exc
-    finally:
-        await engine.dispose()
+    account_id = args.id or uuid.uuid4()
+    password_hash = hash_password(_read_password(args.password_env))
+    configured = ConfiguredUser(
+        id=account_id,
+        email=email,
+        phone=phone,
+        username=username,
+        password_hash=password_hash,
+        is_active=not args.inactive,
+    )
+    InMemoryUserRepository([configured], args.phone_region)
 
-    print("User created successfully")
+    print(
+        json.dumps(
+            {
+                "id": str(account_id),
+                "email": email,
+                "phone": phone,
+                "username": username,
+                "password_hash": password_hash,
+                "is_active": not args.inactive,
+            },
+            separators=(",", ":"),
+        )
+    )
+
+
+def _generate_secrets() -> None:
+    print(f"JWT_SECRET={secrets.token_urlsafe(48)}")
+    print(f"REFRESH_TOKEN_PEPPER={secrets.token_urlsafe(48)}")
 
 
 def main() -> None:
     args = _parser().parse_args()
     try:
-        if args.command == "create-user":
-            asyncio.run(_create_user(args))
+        if args.command == "generate-user":
+            _generate_user(args)
+        elif args.command == "generate-secrets":
+            _generate_secrets()
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
