@@ -1,0 +1,22 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Runtime files
+*.session
+*.session-journal
+Assist.txt*
+downloads/
+*.mp4
+*.mkv
+*.webm
+thumb.jpg

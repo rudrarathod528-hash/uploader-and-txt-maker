@@ -20,10 +20,10 @@ RUN apt-get update \
        wget \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY xxx-main/requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-COPY . .
+COPY xxx-main/ .
 RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8080
