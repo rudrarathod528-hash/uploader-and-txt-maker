@@ -13,6 +13,11 @@ ffprobe
 cryptg
 telethon
 python-decouple
+pyrogram
+tgcrypto
+pypdf
+yt-dlp
+requests
 
 # Authentication and health API
 fastapi==0.115.6
