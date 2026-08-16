@@ -43,6 +43,7 @@ import re
 import os
 from logging.handlers import RotatingFileHandler
 import logging
+from io import BytesIO
 
 
 logging.basicConfig(
@@ -61,13 +62,30 @@ logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging = logging.getLogger()
 
 
-bot = Client("bot",
-             bot_token= "6498400148:AAGbhfblDSLhQJ0pQMjCrDsEqY3oMUWEKFI",
-             api_id=22626671,
-             api_hash= "4081196bbe59a5d6a7fd786b51230bd9")
-auth_users = [6970198165]
+def _required_environment(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} environment variable is required")
+    return value
+
+
+def _integer_list_from_environment(name):
+    raw_value = os.getenv(name, "")
+    try:
+        return [int(value.strip()) for value in raw_value.split(",") if value.strip()]
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a comma-separated list of integers") from exc
+
+
+bot = Client(
+    "bot",
+    bot_token=_required_environment("BOT_TOKEN"),
+    api_id=int(_required_environment("API_ID")),
+    api_hash=_required_environment("API_HASH"),
+)
+auth_users = _integer_list_from_environment("AUTH_USERS")
 sudo_users = auth_users
-sudo_groups = [-1002079135864]
+sudo_groups = _integer_list_from_environment("GROUPS")
 
 shell_usage = f"**USAGE:** Executes terminal commands directly via bot.\n\n<pre>/shell pip install requests</pre>"
 def one(user_id):
@@ -247,7 +265,12 @@ async def account_login(bot: Client, m: Message):
                         url = re.search(r"(https://.*?playlist.m3u8.*?)\"", text).group(1)
 
             elif 'videos.classplusapp' in url:
-             url = requests.get(f'https://api.classplusapp.com/cams/uploader/video/jw-signed-url?url={url}', headers={'x-access-token': 'eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJpZCI6MzgzNjkyMTIsIm9yZ0lkIjoyNjA1LCJ0eXBlIjoxLCJtb2JpbGUiOiI5MTcwODI3NzQyODkiLCJuYW1lIjoiQWNlIiwiZW1haWwiOm51bGwsImlzRmlyc3RMb2dpbiI6dHJ1ZSwiZGVmYXVsdExhbmd1YWdlIjpudWxsLCJjb3VudHJ5Q29kZSI6IklOIiwiaXNJbnRlcm5hdGlvbmFsIjowLCJpYXQiOjE2NDMyODE4NzcsImV4cCI6MTY0Mzg4NjY3N30.hM33P2ai6ivdzxPPfm01LAd4JWv-vnrSxGXqvCirCSpUfhhofpeqyeHPxtstXwe0'}).json()['url']
+             classplus_token = _required_environment("CLASSPLUS_ACCESS_TOKEN")
+             url = requests.get(
+                 f'https://api.classplusapp.com/cams/uploader/video/jw-signed-url?url={url}',
+                 headers={'x-access-token': classplus_token},
+                 timeout=30,
+             ).json()['url']
 
             elif '/master.mpd' in url:
              id =  url.split("/")[-2]
@@ -315,4 +338,5 @@ async def account_login(bot: Client, m: Message):
     await m.reply_text("BATCH SUCCESSFULLY DOWNLOADED ✅")
 
 
-bot.run()
+if __name__ == "__main__":
+    bot.run()

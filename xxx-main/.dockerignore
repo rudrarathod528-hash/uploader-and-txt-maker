@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+vendor
+downloads
+Assist.txt*
