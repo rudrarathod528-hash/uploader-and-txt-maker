@@ -19,4 +19,5 @@ pydantic-settings==2.7.1
 email-validator==2.2.0
 phonenumbers==8.13.52
 imageio-ffmpeg>=0.4.9
+imageio-ffmpeg
 
